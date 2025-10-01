@@ -3,60 +3,80 @@ name: Terraform PR / Merge Workflow
 # Triggers the workflow on pull requests to the main branch (for validation and planning)
 # and on pushes to the main branch (for full apply after merge).
 # Only runs if changes affect Terraform files (in root or tf/ directory).
+# Also triggers manually via workflow_dispatch for destroy operations.
 on:
   pull_request:
     branches: [main]
     paths:
       - "**/*.tf"
       - "tf/**"
+      - "setup.sh"  # Include script changes.
   push:
     branches: [main]
     paths:
       - "**/*.tf"
       - "tf/**"
+      - "setup.sh"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Choose action to perform'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          #- destroy
 
 # Defines permissions for security: read contents, write to pull requests/artifacts, and OIDC for remote backends.
 permissions:
   contents: read
   pull-requests: write
   actions: write
-  id-token: write
+  id-token: write  # Required for OIDC.
 
 jobs:
   # Job 1: 'check' - Runs on both PRs and pushes. Validates, lints, scans, and plans changes.
+  # Skipped for manual dispatch (apply/destroy).
   check:
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
 
     steps:
     # Step 1: Checks out the repository code.
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Step 2: Sets up Terraform CLI with version 1.6.0.
+    # Step 2: Configure AWS credentials using OIDC (assumes IAM role setup).
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::YOUR-ACCOUNT-ID:role/GitHubActionsTerraformRole  # Replace with your IAM role ARN.
+        aws-region: us-west-2  # Match your provider region.
+
+    # Step 3: Sets up Terraform CLI with version 1.6.0.
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: 1.6.0
 
-    # Step 3: Checks Terraform code formatting recursively. Fails if not formatted.
+    # Step 4: Checks Terraform code formatting recursively. Fails if not formatted.
     - name: Terraform fmt check
       run: terraform fmt -recursive -check
 
-    # Step 4: Initializes Terraform with S3 backend config (bucket and key only; no DynamoDB locking).
+    # Step 5: Initializes Terraform (backend config now in backend.tf; OIDC handles auth).
     - name: Terraform init
-      run: terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=week10/terraform.tfstate"
+      run: terraform init
 
-    # Step 5: Validates Terraform configuration for syntax and logic errors.
+    # Step 6: Validates Terraform configuration for syntax and logic errors.
     - name: Terraform validate
       run: terraform validate
 
-    # Step 6: Initializes and runs TFLint for Terraform linting (best practices, errors).
+    # Step 7: Initializes and runs TFLint for Terraform linting (best practices, errors).
     - name: Run TFLint
       run: tflint --init && tflint
 
-    # Step 7: Runs Trivy IaC scan (replaces deprecated tfsec) for security misconfigurations.
+    # Step 8: Runs Trivy IaC scan (replaces deprecated tfsec) for security misconfigurations.
     # Outputs SARIF for GitHub Code Scanning integration.
     - name: Run Trivy IaC Scan
       uses: aquasecurity/trivy-action@master
@@ -69,13 +89,13 @@ jobs:
         vuln-type: 'os,library'
         severity: 'CRITICAL,HIGH'
 
-    # Step 8: Uploads Trivy SARIF results to GitHub for code scanning alerts.
+    # Step 9: Uploads Trivy SARIF results to GitHub for code scanning alerts.
     - name: Upload Trivy SARIF
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: trivy-results.sarif
 
-    # Step 9: Runs Checkov scan for IaC security, compliance, and best practices.
+    # Step 10: Runs Checkov scan for IaC security, compliance, and best practices.
     # Outputs SARIF for GitHub integration; soft-fail doesn't block pipeline.
     - name: Run Checkov
       uses: bridgecrewio/checkov-action@v12
@@ -86,17 +106,17 @@ jobs:
         output_file_path: checkov-results.sarif
         soft_fail: true
 
-    # Step 10: Uploads Checkov SARIF results to GitHub.
+    # Step 11: Uploads Checkov SARIF results to GitHub.
     - name: Upload Checkov SARIF
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: checkov-results.sarif
 
-    # Step 11: Generates Terraform plan and saves to artifact (runs on both PR and push).
+    # Step 12: Generates Terraform plan and saves to artifact (runs on both PR and push).
     - name: Terraform plan
       run: terraform plan -out plan.out
 
-    # Step 12: Uploads the plan file as an artifact for the apply job.
+    # Step 13: Uploads the plan file as an artifact for the apply job.
     - name: Upload plan artifact
       uses: actions/upload-artifact@v4
       with:
@@ -104,10 +124,12 @@ jobs:
         path: plan.out
         retention-days: 1  # Keeps artifact for 1 day.
 
-  # Job 2: 'apply' - Only runs after 'check' succeeds, and only on pushes to main (post-merge).
+  # Job 2: 'apply' - Only runs after 'check' succeeds (on push to main) or on manual dispatch with 'apply' selected.
   apply:
-    needs: check  # Depends on check job succeeding.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check  # Depends on check job succeeding (skipped if manual).
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
     runs-on: ubuntu-latest
 
     steps:
@@ -115,33 +137,72 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # Step 2: Sets up Terraform.
+    # Step 2: Configure AWS credentials using OIDC.
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::YOUR-ACCOUNT-ID:role/GitHubActionsTerraformRole  # Replace with your IAM role ARN.
+        aws-region: us-east-1
+
+    # Step 3: Sets up Terraform.
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: 1.6.0
 
-    # Step 3: Initializes Terraform with S3 backend config (bucket and key only; no DynamoDB locking).
+    # Step 4: Initializes Terraform.
     - name: Terraform init
-      run: terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=week10/terraform.tfstate"
+      run: terraform init
 
-    # Step 4: Downloads the plan artifact from the check job.
+    # Step 5: Terraform plan (for manual apply; fresh for consistency).
+    - name: Terraform plan (for manual apply)
+      if: github.event_name == 'workflow_dispatch'
+      run: terraform plan -out plan.out
+
+    # Step 6: Downloads the plan artifact from the check job (for push).
     - name: Download plan artifact
+      if: github.event_name == 'push'
       uses: actions/download-artifact@v4
       with:
         name: tf-plan
         path: .
 
-    # Step 5: Applies the plan to deploy changes (auto-approve for CI).
+    # Step 7: Applies the plan to deploy changes (auto-approve for CI).
     - name: Terraform apply
       run: terraform apply -auto-approve plan.out
 
-      # Step 4: Generates a destroy plan to preview what will be deleted (optional but recommended for review).
+  # Job 3: 'destroy' - Runs only on manual dispatch with 'destroy' selected.
+  # WARNING: This will delete all resources managed by Terraform—use with extreme caution!
+  #destroy:
+    #if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+    #runs-on: ubuntu-latest
+
+    #steps:
+    # Step 1: Checks out the code (needed for .tf files during destroy).
+    #- name: Checkout
+      #uses: actions/checkout@v4
+
+    # Step 2: Configure AWS credentials using OIDC.
+    #- name: Configure AWS credentials
+      #uses: aws-actions/configure-aws-credentials@v4
+      #with:
+        #role-to-assume: arn:aws:iam::YOUR-ACCOUNT-ID:role/GitHubActionsTerraformRole
+        #aws-region: us-east-1
+
+    # Step 3: Sets up Terraform.
+    #- name: Setup Terraform
+      #uses: hashicorp/setup-terraform@v3
+      #with:
+        #terraform_version: 1.6.0
+
+    # Step 4: Initializes Terraform with S3 backend to load the state.
+    #- name: Terraform init
+      #run: terraform init
+
+    # Step 5: Generates a destroy plan to preview what will be deleted (optional but recommended for review).
     #- name: Terraform destroy plan
       #run: terraform plan -destroy -out destroy.plan
 
-    # Step 5: Destroys all resources (auto-approve for CI; review the plan output in logs).
+    # Step 6: Destroys all resources (auto-approve for CI; review the plan output in logs).
     #- name: Terraform destroy
       #run: terraform apply -auto-approve destroy.plan
