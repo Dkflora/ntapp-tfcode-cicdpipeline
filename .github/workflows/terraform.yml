@@ -137,3 +137,11 @@ jobs:
     # Step 5: Applies the plan to deploy changes (auto-approve for CI).
     - name: Terraform apply
       run: terraform apply -auto-approve plan.out
+
+      # Step 4: Generates a destroy plan to preview what will be deleted (optional but recommended for review).
+    #- name: Terraform destroy plan
+      #run: terraform plan -destroy -out destroy.plan
+
+    # Step 5: Destroys all resources (auto-approve for CI; review the plan output in logs).
+    #- name: Terraform destroy
+      #run: terraform apply -auto-approve destroy.plan
