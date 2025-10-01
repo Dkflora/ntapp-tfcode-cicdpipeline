@@ -1,0 +1,139 @@
+name: Terraform PR / Merge Workflow
+
+# Triggers the workflow on pull requests to the main branch (for validation and planning)
+# and on pushes to the main branch (for full apply after merge).
+# Only runs if changes affect Terraform files (in root or tf/ directory).
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.tf"
+      - "tf/**"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.tf"
+      - "tf/**"
+
+# Defines permissions for security: read contents, write to pull requests/artifacts, and OIDC for remote backends.
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+  id-token: write
+
+jobs:
+  # Job 1: 'check' - Runs on both PRs and pushes. Validates, lints, scans, and plans changes.
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checks out the repository code.
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # Step 2: Sets up Terraform CLI with version 1.6.0.
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    # Step 3: Checks Terraform code formatting recursively. Fails if not formatted.
+    - name: Terraform fmt check
+      run: terraform fmt -recursive -check
+
+    # Step 4: Initializes Terraform with S3 backend config (bucket and key only; no DynamoDB locking).
+    - name: Terraform init
+      run: terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=week10/terraform.tfstate"
+
+    # Step 5: Validates Terraform configuration for syntax and logic errors.
+    - name: Terraform validate
+      run: terraform validate
+
+    # Step 6: Initializes and runs TFLint for Terraform linting (best practices, errors).
+    - name: Run TFLint
+      run: tflint --init && tflint
+
+    # Step 7: Runs Trivy IaC scan (replaces deprecated tfsec) for security misconfigurations.
+    # Outputs SARIF for GitHub Code Scanning integration.
+    - name: Run Trivy IaC Scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
+
+    # Step 8: Uploads Trivy SARIF results to GitHub for code scanning alerts.
+    - name: Upload Trivy SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-results.sarif
+
+    # Step 9: Runs Checkov scan for IaC security, compliance, and best practices.
+    # Outputs SARIF for GitHub integration; soft-fail doesn't block pipeline.
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@v12
+      with:
+        directory: .
+        framework: terraform
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+        soft_fail: true
+
+    # Step 10: Uploads Checkov SARIF results to GitHub.
+    - name: Upload Checkov SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: checkov-results.sarif
+
+    # Step 11: Generates Terraform plan and saves to artifact (runs on both PR and push).
+    - name: Terraform plan
+      run: terraform plan -out plan.out
+
+    # Step 12: Uploads the plan file as an artifact for the apply job.
+    - name: Upload plan artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: tf-plan
+        path: plan.out
+        retention-days: 1  # Keeps artifact for 1 day.
+
+  # Job 2: 'apply' - Only runs after 'check' succeeds, and only on pushes to main (post-merge).
+  apply:
+    needs: check  # Depends on check job succeeding.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checks out the code.
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # Step 2: Sets up Terraform.
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.6.0
+
+    # Step 3: Initializes Terraform with S3 backend config (bucket and key only; no DynamoDB locking).
+    - name: Terraform init
+      run: terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=week10/terraform.tfstate"
+
+    # Step 4: Downloads the plan artifact from the check job.
+    - name: Download plan artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: tf-plan
+        path: .
+
+    # Step 5: Applies the plan to deploy changes (auto-approve for CI).
+    - name: Terraform apply
+      run: terraform apply -auto-approve plan.out
