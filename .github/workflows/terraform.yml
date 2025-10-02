@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-      
+
 jobs:
   terraform:
     name: 'Terraform Lint, Security Check, and Deploy'
@@ -16,40 +16,45 @@ jobs:
     env:
       AWS_REGION: 'us-east-1' # Set your desired AWS region
       TF_VERSION: '1.4.0'
+      TF_LOG: ERROR           # Set to DEBUG for more verbose logs
+
     steps:
-    - name: 'Checkout GitHub repository'
-      uses: actions/checkout@v2
+      - name: 'Checkout GitHub repository'
+        uses: actions/checkout@v4
 
-    - name: 'Configure AWS credentials'
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: 'Set up Terraform'
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
+      - name: 'Set up Terraform'
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-    - name: 'Terraform Init'
-      run: terraform init
+      - name: 'Terraform Init'
+        run: terraform init
 
-    - name: 'Terraform Format'
-      run: terraform fmt
+      - name: 'Terraform Format'
+        run: terraform fmt
 
-    - name: 'Terraform Validate'
-      run: terraform validate
-      
-    - name: 'Terraform Plan'
-      run: terraform plan -out=tfplan
+      - name: 'Terraform Validate'
+        run: terraform validate
 
-    - name: 'Terraform Apply'
-      if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve tfplan
-     
-    #- name: 'Terraform Plan Destroy'
-      #run: terraform plan -destroy -out=tfplan-destroy
+      - name: 'Terraform Plan'
+        run: terraform plan -out=tfplan
 
-    #- name: 'Terraform Apply Destroy'
-      #run: terraform apply -auto-approve tfplan-destroy
+      - name: 'Terraform Apply'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
+        env:
+          TF_LOG: ERROR
+
+      # Uncomment these if you want destroy steps
+      #- name: 'Terraform Plan Destroy'
+      #  run: terraform plan -destroy -out=tfplan-destroy
+
+      #- name: 'Terraform Apply Destroy'
+      #  run: terraform apply -auto-approve tfplan-destroy
