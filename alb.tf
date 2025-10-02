@@ -7,15 +7,16 @@ resource "aws_lb_target_group" "group1" {
   vpc_id   = aws_vpc.my-vpc.id  # Assumes aws_vpc.my-vpc is defined elsewhere.
 
   health_check {
-    enabled             = true
-    healthy_threshold   = 3
-    interval            = 10
-    matcher             = ["200"]  # Fixed: List of strings required for HTTP.
-    path                = "/"
-    port                = "traffic-port"
-    protocol            = "HTTP"
-    timeout             = 6
-    unhealthy_threshold = 3
+  enabled             = true
+  healthy_threshold   = 3
+  interval            = 10
+  matcher             = "200"        # ✅ correct
+  path                = "/"
+  port                = "traffic-port"
+  protocol            = "HTTP"
+  timeout             = 6
+  unhealthy_threshold = 3
+  
   }
   depends_on = [aws_vpc.my-vpc]  # Assumes resource name is "my-vpc".
 }
