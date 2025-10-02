@@ -6,7 +6,7 @@ terraform {
       version = "~> 5.0"  # Stable version as of 2025; supports your resources.
     }
   }
-  required_version = ">= 1.6.0"  # Matches your workflow.
+  required_version = ">= 1.0.0, <= 1.4.0"  # Matches your workflow.
 }
 
 # AWS provider configuration.
