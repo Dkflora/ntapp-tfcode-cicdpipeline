@@ -46,15 +46,15 @@ jobs:
       - name: 'Terraform Plan'
         run: terraform plan -out=tfplan
 
-      - name: 'Terraform Apply'
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform apply -auto-approve tfplan
-        env:
-          TF_LOG: ERROR
+      #- name: 'Terraform Apply'
+        #if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        #run: terraform apply -auto-approve tfplan
+        #env:
+          #TF_LOG: ERROR
 
       # Uncomment these if you want destroy steps
-      #- name: 'Terraform Plan Destroy'
-      #  run: terraform plan -destroy -out=tfplan-destroy
+      - name: 'Terraform Plan Destroy'
+        run: terraform plan -destroy -out=tfplan-destroy
 
-      #- name: 'Terraform Apply Destroy'
-      #  run: terraform apply -auto-approve tfplan-destroy
+      - name: 'Terraform Apply Destroy'
+        run: terraform apply -auto-approve tfplan-destroy
